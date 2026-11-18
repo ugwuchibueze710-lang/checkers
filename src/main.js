@@ -341,17 +341,55 @@ function buildControlBox(outer) {
   box.add(hitT, hitK);
   box.position.set(bx, -BOARD_T, bz);
   boardGroup.add(box);
-  // cable: from the frame's side, sagging onto the table, into the back of the box
-  const from = new THREE.Vector3(-outer, -BOARD_T + 0.35, bz - 3.2);
-  const pts = [from, new THREE.Vector3(-outer - 0.35, -BOARD_T + 0.12, bz - 3.0), new THREE.Vector3(-outer - 0.9, -BOARD_T + 0.09, bz - 2.6),
-    new THREE.Vector3(bx - 0.6, -BOARD_T + 0.09, bz - 2.4), new THREE.Vector3(bx - 0.15, -BOARD_T + 0.12, bz - 1.75), new THREE.Vector3(bx, -BOARD_T + 0.3, bz - 1.38)];
-  const cable = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 80, 0.085, 12), rubber);
-  cable.castShadow = true; boardGroup.add(cable);
-  for (const [p, dir] of [[from, new THREE.Vector3(-1, 0, 0)], [pts[pts.length - 1], new THREE.Vector3(0, 0, 1)]]) {
-    const relief = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.32, 16), rubber);
-    relief.position.copy(p); relief.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir); boardGroup.add(relief);
-  }
+  neon.box = box;
   applyNeon(true);
+}
+
+// cable: leaves the frame, sags onto the table and plugs into the back of the box
+function rebuildCable(from, outDir, to, inDir) {
+  if (neon.cable) { boardGroup.remove(neon.cable); neon.cable.traverse((o) => o.geometry && o.geometry.dispose()); }
+  const y0 = -BOARD_T;
+  const a = from.clone().addScaledVector(outDir, 0.35); a.y = y0 + 0.12;
+  const b = from.clone().addScaledVector(outDir, 0.9); b.y = y0 + 0.09;
+  const d = to.clone().addScaledVector(inDir, -0.4); d.y = y0 + 0.12;
+  const c = b.clone().lerp(d, 0.5); c.y = y0 + 0.09; c.x += 0.45; // a lazy S in the cord
+  const pts = [from, a, b, c, d, to];
+  const g = new THREE.Group();
+  const cable = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 80, 0.085, 12), rubber);
+  cable.castShadow = true; g.add(cable);
+  for (const [p, dir] of [[from, outDir], [to, inDir]]) {
+    const relief = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.32, 16), rubber);
+    relief.position.copy(p); relief.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir); g.add(relief);
+  }
+  neon.cable = g; boardGroup.add(g);
+}
+
+// Phone (portrait): board fills the screen width, clock + switch box sit on the table in front of the near player.
+// Wide screens: clock beside the board, switch box on the other side (tournament layout).
+let propsPortrait = null, propsSide = 0;
+function layoutProps() {
+  if (!clock.group || !neon.box) return;
+  const outer = boardHalf + FRAME_W, portrait = innerWidth / innerHeight < 1, side = camSide;
+  if (portrait === propsPortrait && side === propsSide && neon.cable) return;
+  propsPortrait = portrait; propsSide = side;
+  const y = -BOARD_T;
+  if (portrait) {
+    const fz = side * (outer + 2.15);
+    clock.group.position.set(outer - 4.0, y, fz);
+    clock.group.rotation.y = side * Math.PI / 2;
+    neon.box.position.set(-outer + 1.6, y, side * (outer + 1.95));
+    neon.box.rotation.y = side === 1 ? 0 : Math.PI;
+    const from = new THREE.Vector3(-outer + 1.6, y + 0.35, side * outer);
+    const to = neon.box.position.clone().add(new THREE.Vector3(0, 0.3, -side * 1.38));
+    rebuildCable(from, new THREE.Vector3(0, 0, side), to, new THREE.Vector3(0, 0, side));
+  } else {
+    clock.group.position.set(outer + 1.75, y, 0); clock.group.rotation.y = 0;
+    neon.box.position.set(-outer - 1.75, y, outer * 0.38); neon.box.rotation.y = 0;
+    const from = new THREE.Vector3(-outer, y + 0.35, outer * 0.38 - 3.2);
+    const to = neon.box.position.clone().add(new THREE.Vector3(0, 0.3, -1.38));
+    rebuildCable(from, new THREE.Vector3(-1, 0, 0), to, new THREE.Vector3(0, 0, 1));
+  }
+  drawClockFace();
 }
 
 function buildClock(outer) {
@@ -388,6 +426,7 @@ function buildProps() {
   const outer = boardHalf + FRAME_W;
   buildNeon(outer);
   buildClock(outer);
+  neon.cable = null; propsPortrait = null;
   buildControlBox(outer);
 }
 
@@ -423,12 +462,13 @@ function drawClockFace() {
   g.fillStyle = 'rgba(0,0,0,0.06)'; for (let y = 0; y < 640; y += 4) g.fillRect(0, y, 256, 1);
   for (const color of [-1, 1]) {
     g.save();
-    if (color === -1) { g.translate(128, 160); g.rotate(Math.PI); } else g.translate(128, 480);
+    if (color === -1) g.translate(128, 160); else g.translate(128, 480);
+    if (propsPortrait) g.rotate(Math.PI / 2); else if (color === -1) g.rotate(Math.PI);
     const active = game && game.turn === color && !game.over;
     g.fillStyle = active ? '#141c13' : 'rgba(20,28,19,0.55)';
-    g.font = '700 74px "Courier New", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = `700 ${propsPortrait ? 64 : 74}px "Courier New", monospace`; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText(fmtTime(game ? game.clock[color] : 0), 0, 0);
-    g.font = '700 22px Inter, sans-serif'; g.fillText(color === 1 ? 'RED' : 'WHITE', 0, 70);
+    g.font = '700 22px Inter, sans-serif'; g.fillText(color === 1 ? 'RED' : 'WHITE', 0, propsPortrait ? 58 : 70);
     if (active) { g.beginPath(); g.moveTo(-14, -78); g.lineTo(14, -78); g.lineTo(0, -60); g.fill(); }
     g.restore();
   }
@@ -506,8 +546,12 @@ function clearPieces() {
 }
 // captured men are stacked on the table at the capturer's end, like real play
 function capturedSlot(capturer, n) {
-  const col = n % 6, lvl = Math.floor(n / 6);
   const z = capturer * (boardHalf + FRAME_W + 1.2);
+  if (propsPortrait && capturer === camSide) { // keep the near pile between the switch box and the clock
+    const col = n % 4, lvl = Math.floor(n / 4);
+    return new THREE.Vector3((-4.6 + col * 1.6) * capturer, -BOARD_T + lvl * PH, z);
+  }
+  const col = n % 6, lvl = Math.floor(n / 6);
   return new THREE.Vector3((col - 2.5) * 1.75 * capturer, -BOARD_T + lvl * PH, z);
 }
 function updateContacts() {
@@ -868,11 +912,22 @@ function fitCamera(instant) {
   const vfov = THREE.MathUtils.degToRad(camera.fov), aspect = innerWidth / innerHeight;
   const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect);
   const barFrac = Math.min(0.45, (2 * 80 + 60) / innerHeight); // room for the two player bars
-  const dW = halfW / Math.tan(hfov / 2), dH = half / (Math.tan(vfov / 2) * (1 - barFrac));
-  const d = Math.max(dW, dH) + half * 0.08;
+  const portrait = aspect < 1;
+  layoutProps();
+  let d, tz = camSide * 0.4;
+  if (portrait) {
+    const outer = (N * SQ) / 2 + FRAME_W, front = outer + 4.4; // board + the strip in front holding clock & switch
+    const halfZ = (front + outer) / 2;
+    tz = camSide * (front - outer) / 2;
+    const dW2 = (outer + 0.15) / Math.tan(hfov / 2), dH2 = (halfZ * 0.93) / (Math.tan(vfov / 2) * (1 - barFrac));
+    d = Math.max(dW2, dH2);
+  } else {
+    const dW = halfW / Math.tan(hfov / 2), dH = half / (Math.tan(vfov / 2) * (1 - barFrac));
+    d = Math.max(dW, dH) + half * 0.08;
+  }
   const tilt = viewMode === 1 ? 0.001 : viewMode === 2 ? 0.75 : (aspect < 1 ? 0.38 : 0.5);
-  const p = new THREE.Vector3(0, d * Math.cos(tilt), camSide * d * Math.sin(tilt));
-  controls.target.set(0, 0, camSide * 0.4);
+  const p = new THREE.Vector3(0, d * Math.cos(tilt), tz + camSide * d * Math.sin(tilt));
+  controls.target.set(0, 0, tz);
   if (instant) { camera.position.copy(p); controls.update(); } else { camGoal.pos.copy(p); camGoal.active = true; }
 }
 
