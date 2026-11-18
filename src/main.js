@@ -97,9 +97,9 @@ const MAT = {
   light: woodMat('light', { color: 0xfff8f0 }),
   dark: woodMat('dark', { color: 0xa87a62 }),
   frame: woodMat('frame', { color: 0x8a5a44, clearcoat: 0.3 }),
-  table: woodMat('table', { color: 0x7a5a48, roughness: 1, clearcoat: 0.04, clearcoatRoughness: 0.6, envMapIntensity: 0.25, specularIntensity: 0.25 }),
+  table: woodMat('table', { color: 0x7a5a48, roughness: 1, roughnessMap: null, clearcoat: 0, envMapIntensity: 0.25, specularIntensity: 0.08 }),
   red: new THREE.MeshPhysicalMaterial({ color: 0x9c0f17, roughness: 0.42, clearcoat: 0.35, clearcoatRoughness: 0.28, sheen: 0.25, sheenColor: new THREE.Color(0xff5544), envMapIntensity: 0.55 }),
-  black: new THREE.MeshPhysicalMaterial({ color: 0x151313, roughness: 0.46, clearcoat: 0.35, clearcoatRoughness: 0.25, sheen: 0.2, sheenColor: new THREE.Color(0x7d8794), envMapIntensity: 0.55 }),
+  ivory: new THREE.MeshPhysicalMaterial({ color: 0xeee2c8, roughness: 0.34, clearcoat: 0.45, clearcoatRoughness: 0.2, sheen: 0.35, sheenColor: new THREE.Color(0xfff6e6), envMapIntensity: 0.6 }),
   gold: new THREE.MeshPhysicalMaterial({ color: 0xe9b949, metalness: 1, roughness: 0.24, envMapIntensity: 1.4 }),
   ruby: new THREE.MeshPhysicalMaterial({ color: 0xb00c25, roughness: 0.06, clearcoat: 1, ior: 1.77, emissive: 0x2a0006, envMapIntensity: 2 }),
   sapphire: new THREE.MeshPhysicalMaterial({ color: 0x1640b8, roughness: 0.06, clearcoat: 1, ior: 1.77, emissive: 0x020825, envMapIntensity: 2 }),
@@ -223,8 +223,248 @@ function buildBoard(V) {
   for (const [sx, sz, x, z] of [[play + 0.68, w, 0, o], [play + 0.68, w, 0, -o], [w, play + 0.68, o, 0], [w, play + 0.68, -o, 0]]) {
     const s = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.01, sz), inlay); s.position.set(x, 0.002, z); s.receiveShadow = true; boardGroup.add(s);
   }
+  buildProps();
   world.add(boardGroup);
   fitCamera(true);
+}
+
+
+// ------------------------------------------------------------ props: chess clock, neon under-glow, cable + control box
+const chrome = new THREE.MeshPhysicalMaterial({ color: 0xe8e8ea, metalness: 1, roughness: 0.16, envMapIntensity: 1.2 });
+const brushed = new THREE.MeshPhysicalMaterial({ color: 0xb9bcc0, metalness: 1, roughness: 0.35, envMapIntensity: 1 });
+const blackPlastic = new THREE.MeshPhysicalMaterial({ color: 0x141414, roughness: 0.45, clearcoat: 0.3, clearcoatRoughness: 0.4 });
+const rubber = new THREE.MeshPhysicalMaterial({ color: 0x0d0d0d, roughness: 0.62, sheen: 0.4, sheenColor: new THREE.Color(0x333333) });
+const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+const clock = { group: null, plungers: {}, leds: {}, ctx: null, tex: null, down: 0 };
+const neon = { tube: null, glow: null, fill: null, color: new THREE.Color(0xff2a40), target: new THREE.Color(0xff2a40), on: store.get('neonOn', true), level: store.get('neonLevel', 0.7), toggle: null, knob: null };
+const NEON_COLORS = { 1: new THREE.Color(0xff2440), '-1': new THREE.Color(0x8fd2ff) };
+const PROPS_MARGIN = 3.6; // how far the clock / control box reach past the frame
+
+function roundedRectPoints(hx, hz, r, y, seg = 8) {
+  const pts = [], corners = [[hx - r, hz - r, 0], [-hx + r, hz - r, Math.PI / 2], [-hx + r, -hz + r, Math.PI], [hx - r, -hz + r, Math.PI * 1.5]];
+  for (const [cx, cz, a0] of corners) for (let i = 0; i <= seg; i++) {
+    const a = a0 + (i / seg) * (Math.PI / 2);
+    pts.push(new THREE.Vector3(cx + Math.cos(a) * r, y, cz + Math.sin(a) * r));
+  }
+  return pts;
+}
+function glowTexture(innerFrac) {
+  const S = 512, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  const inner = S * innerFrac, off = (S - inner) / 2, rr = inner * 0.04;
+  const rect = (x, y, w, h, r) => { g.beginPath(); g.roundRect(x, y, w, h, r); };
+  // shadow-blur trick: draw the shape far off-canvas, keep only its soft shadow
+  g.shadowColor = 'rgba(255,255,255,1)'; g.shadowOffsetX = 2000;
+  for (const [blur, a] of [[90, 0.55], [40, 0.6], [14, 0.8]]) {
+    g.shadowBlur = blur; g.globalAlpha = a; g.lineWidth = 10; g.strokeStyle = '#fff';
+    rect(off - 2000, off, inner, inner, rr); g.stroke();
+  }
+  g.globalAlpha = 1; g.shadowColor = 'transparent';
+  g.globalCompositeOperation = 'destination-out'; rect(off + 6, off + 6, inner - 12, inner - 12, rr); g.fill(); // nothing glows under the board
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+
+function buildNeon(outer) {
+  const y = -BOARD_T + 0.09;
+  const curve = new THREE.CatmullRomCurve3(roundedRectPoints(outer + 0.06, outer + 0.06, 0.35, y), true, 'centripetal');
+  neon.tubeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: neon.color, emissiveIntensity: 3, roughness: 0.3, toneMapped: false });
+  neon.tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 240, 0.07, 10, true), neon.tubeMat);
+  boardGroup.add(neon.tube);
+  // mounting clips every few inches
+  for (let i = 0; i < 28; i++) {
+    const p = curve.getPointAt(i / 28);
+    const clip = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.22), blackPlastic); clip.position.copy(p); clip.position.y += 0.02; boardGroup.add(clip);
+  }
+  const size = (outer + 7) * 2;
+  neon.glowMat = new THREE.MeshBasicMaterial({ map: glowTexture((outer * 2) / size), color: neon.color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+  neon.glow = new THREE.Mesh(new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2), neon.glowMat);
+  neon.glow.position.y = -BOARD_T + 0.012; neon.glow.renderOrder = 2;
+  boardGroup.add(neon.glow);
+  // the glow also lifts the board and pieces a little, tinted by the tube
+  if (!neon.fill) { neon.fill = new THREE.HemisphereLight(0xffffff, 0x000000, 0); scene.add(neon.fill); }
+  for (const k of ['a', 'b']) { if (neon[k]) scene.remove(neon[k]); }
+  neon.a = new THREE.PointLight(neon.color, 0, outer * 3.2, 1.6); neon.a.position.set(-outer - 0.6, -BOARD_T + 0.6, outer * 0.4);
+  neon.b = new THREE.PointLight(neon.color, 0, outer * 3.2, 1.6); neon.b.position.set(outer + 0.6, -BOARD_T + 0.6, -outer * 0.4);
+  scene.add(neon.a, neon.b);
+}
+
+function knurledKnob() {
+  const g = new THREE.CylinderGeometry(0.42, 0.46, 0.5, 72, 1);
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i), r = Math.hypot(x, z);
+    if (r < 0.3) continue;
+    const a = Math.atan2(z, x), k = 1 + 0.035 * Math.sign(Math.sin(a * 36));
+    pos.setX(i, x * k); pos.setZ(i, z * k);
+  }
+  g.computeVertexNormals();
+  const knob = new THREE.Group();
+  knob.add(new THREE.Mesh(g, brushed));
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.02, 48), new THREE.MeshPhysicalMaterial({ color: 0x9a9da2, metalness: 1, roughness: 0.25 }));
+  cap.position.y = 0.26; knob.add(cap);
+  const mark = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 0.28), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  mark.position.set(0, 0.275, -0.17); knob.add(mark);
+  knob.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return knob;
+}
+
+function buildControlBox(outer) {
+  const box = new THREE.Group();
+  const bx = -outer - 1.75, bz = outer * 0.38;
+  const shell = new THREE.Mesh(new RoundedBoxGeometry(2.3, 0.9, 2.7, 4, 0.14), blackPlastic);
+  shell.position.y = 0.45; shell.castShadow = true; shell.receiveShadow = true; box.add(shell);
+  // printed top plate
+  const c = document.createElement('canvas'); c.width = 256; c.height = 300; const g = c.getContext('2d');
+  g.fillStyle = '#1b1b1d'; g.fillRect(0, 0, 256, 300);
+  g.fillStyle = '#cfcfcf'; g.font = '700 22px Inter, sans-serif'; g.textAlign = 'center';
+  g.fillText('NEON', 128, 32);
+  g.font = '600 15px Inter, sans-serif'; g.fillText('ON', 128, 78); g.fillText('OFF', 128, 150);
+  for (let i = 0; i <= 10; i++) { const a = Math.PI * 0.75 + (i / 10) * Math.PI * 1.5; g.fillRect(128 + Math.cos(a) * 62 - 1.5, 232 + Math.sin(a) * 62 - 1.5, 3, 3); }
+  g.fillText('DIM', 128, 296);
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 2.34).rotateX(-Math.PI / 2), new THREE.MeshPhysicalMaterial({ map: new THREE.CanvasTexture(c), roughness: 0.5, clearcoat: 0.4 }));
+  plate.material.map.colorSpace = THREE.SRGBColorSpace;
+  plate.position.y = 0.905; box.add(plate);
+  // toggle switch: hex nut + chrome bat lever on a pivot
+  const nut = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.12, 6), chrome); nut.position.set(0, 0.96, -0.55); box.add(nut);
+  const pivot = new THREE.Group(); pivot.position.set(0, 1.0, -0.55);
+  const bat = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 0.62, 20), chrome); bat.position.y = 0.31; bat.castShadow = true;
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.075, 16, 12), chrome); tip.position.y = 0.62;
+  pivot.add(bat, tip); box.add(pivot);
+  neon.toggle = pivot;
+  // dimmer knob
+  const knob = knurledKnob(); knob.position.set(0, 1.0, 0.5); box.add(knob); neon.knob = knob;
+  // pilot LED
+  const led = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 8), new THREE.MeshBasicMaterial({ color: 0x33ff66, toneMapped: false })); led.position.set(0.72, 0.93, -1.0); box.add(led); neon.led = led;
+  // hit zones
+  const hitT = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.6, 1.35), hitMat); hitT.position.set(0, 0.9, -0.67); hitT.userData.prop = 'toggle';
+  const hitK = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.6, 1.35), hitMat); hitK.position.set(0, 0.9, 0.67); hitK.userData.prop = 'knob';
+  box.add(hitT, hitK);
+  box.position.set(bx, -BOARD_T, bz);
+  boardGroup.add(box);
+  // cable: from the frame's side, sagging onto the table, into the back of the box
+  const from = new THREE.Vector3(-outer, -BOARD_T + 0.35, bz - 3.2);
+  const pts = [from, new THREE.Vector3(-outer - 0.35, -BOARD_T + 0.12, bz - 3.0), new THREE.Vector3(-outer - 0.9, -BOARD_T + 0.09, bz - 2.6),
+    new THREE.Vector3(bx - 0.6, -BOARD_T + 0.09, bz - 2.4), new THREE.Vector3(bx - 0.15, -BOARD_T + 0.12, bz - 1.75), new THREE.Vector3(bx, -BOARD_T + 0.3, bz - 1.38)];
+  const cable = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 80, 0.085, 12), rubber);
+  cable.castShadow = true; boardGroup.add(cable);
+  for (const [p, dir] of [[from, new THREE.Vector3(-1, 0, 0)], [pts[pts.length - 1], new THREE.Vector3(0, 0, 1)]]) {
+    const relief = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.32, 16), rubber);
+    relief.position.copy(p); relief.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir); boardGroup.add(relief);
+  }
+  applyNeon(true);
+}
+
+function buildClock(outer) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new RoundedBoxGeometry(2.6, 2.1, 7.0, 5, 0.28), MAT.frame);
+  body.position.y = 1.05; body.castShadow = true; body.receiveShadow = true; g.add(body);
+  // LCD window
+  const c = document.createElement('canvas'); c.width = 256; c.height = 640; clock.ctx = c.getContext('2d');
+  clock.tex = new THREE.CanvasTexture(c); clock.tex.colorSpace = THREE.SRGBColorSpace;
+  const bezel = new THREE.Mesh(new RoundedBoxGeometry(1.75, 0.06, 3.5, 2, 0.03), blackPlastic); bezel.position.set(0, 2.1, 0); g.add(bezel);
+  const lcd = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 3.2).rotateX(-Math.PI / 2), new THREE.MeshPhysicalMaterial({ map: clock.tex, emissiveMap: clock.tex, emissive: 0xffffff, emissiveIntensity: 0.35, roughness: 0.08, clearcoat: 1 }));
+  lcd.position.set(0, 2.135, 0); g.add(lcd);
+  // a plunger at each player's end: red at +z, white at -z
+  for (const color of [1, -1]) {
+    const pl = new THREE.Group();
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.66, 0.12, 40), chrome); collar.position.y = 0.06; g.add(collar); collar.position.set(0, 2.1, color * 2.65);
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.7, 20), chrome); stem.position.y = 0.2; pl.add(stem);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.58, 0.32, 48), (color === 1 ? MAT.red : MAT.ivory).clone()); cap.position.y = 0.62; cap.castShadow = true; pl.add(cap);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.565, 0.03, 10, 48), chrome); rim.rotation.x = Math.PI / 2; rim.position.y = 0.78; pl.add(rim);
+    pl.position.set(0, 2.1, color * 2.65);
+    g.add(pl); clock.plungers[color] = pl;
+    const led = new THREE.Mesh(new THREE.SphereGeometry(0.09, 14, 10), new THREE.MeshBasicMaterial({ color: 0x222222, toneMapped: false }));
+    led.position.set(0.85, 2.13, color * 1.45); g.add(led); clock.leds[color] = led;
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(3.2, 3.4, 3.5), hitMat); hit.position.set(0, 1.8, color * 1.8); hit.userData.prop = 'clock'; hit.userData.color = color; g.add(hit);
+  }
+  g.position.set(outer + 1.75, -BOARD_T, 0);
+  boardGroup.add(g);
+  clock.group = g;
+  setPlungers(true);
+  drawClockFace();
+}
+
+function buildProps() {
+  const outer = boardHalf + FRAME_W;
+  buildNeon(outer);
+  buildClock(outer);
+  buildControlBox(outer);
+}
+
+// the plunger of the player who must move stands UP; the other is pressed DOWN (rocker, like a real clock)
+function setPlungers(instant) {
+  const turn = game && !game.over ? game.turn : 0;
+  for (const c of [1, -1]) {
+    const pl = clock.plungers[c]; if (!pl) continue;
+    const to = 2.1 + (turn === c || !turn ? 0 : -0.28);
+    if (instant) pl.position.y = to;
+    else { const from = pl.position.y; tween(140, (t) => { pl.position.y = mix(from, to, ease.out(t)); }); }
+  }
+}
+async function pressClock(color) {
+  const pl = clock.plungers[color]; if (!pl) return;
+  Sound.clockPress(); vibrate(15);
+  const y0 = pl.position.y;
+  await tween(85, (t) => { pl.position.y = y0 - 0.3 * ease.out(t); });
+}
+function updateClockLeds() {
+  if (!game) return;
+  const ready = !!completedMove() && !game.busy;
+  for (const c of [1, -1]) {
+    const led = clock.leds[c]; if (!led) continue;
+    const mine = game.turn === c && !game.over;
+    led.material.color.set(!mine ? 0x221a1a : ready ? 0x2bff5a : 0xffb020);
+  }
+}
+function fmtTime(ms) { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+function drawClockFace() {
+  const g = clock.ctx; if (!g) return;
+  g.fillStyle = '#93a88f'; g.fillRect(0, 0, 256, 640);
+  g.fillStyle = 'rgba(0,0,0,0.06)'; for (let y = 0; y < 640; y += 4) g.fillRect(0, y, 256, 1);
+  for (const color of [-1, 1]) {
+    g.save();
+    if (color === -1) { g.translate(128, 160); g.rotate(Math.PI); } else g.translate(128, 480);
+    const active = game && game.turn === color && !game.over;
+    g.fillStyle = active ? '#141c13' : 'rgba(20,28,19,0.55)';
+    g.font = '700 74px "Courier New", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(fmtTime(game ? game.clock[color] : 0), 0, 0);
+    g.font = '700 22px Inter, sans-serif'; g.fillText(color === 1 ? 'RED' : 'WHITE', 0, 70);
+    if (active) { g.beginPath(); g.moveTo(-14, -78); g.lineTo(14, -78); g.lineTo(0, -60); g.fill(); }
+    g.restore();
+  }
+  g.fillStyle = 'rgba(20,28,19,0.4)'; g.fillRect(20, 318, 216, 4);
+  clock.tex.needsUpdate = true;
+}
+
+function applyNeon(instant) {
+  if (!neon.tubeMat) return;
+  const L = neon.on ? neon.level : 0;
+  neon.tubeMat.emissiveIntensity = neon.on ? 0.6 + 3.2 * L : 0.0;
+  neon.tubeMat.color.set(neon.on ? 0xffffff : 0x8a8a8a);
+  neon.glowMat.opacity = 0.95 * L;
+  neon.fill.intensity = 0.55 * L;
+  neon.a.intensity = neon.b.intensity = 26 * L;
+  if (neon.led) neon.led.material.color.set(neon.on ? 0x33ff66 : 0x1a2a1a);
+  if (neon.toggle) {
+    const to = neon.on ? -0.5 : 0.5, from = neon.toggle.rotation.x;
+    if (instant) neon.toggle.rotation.x = to; else tween(110, (t) => { neon.toggle.rotation.x = mix(from, to, ease.out(t)); });
+  }
+  if (neon.knob) neon.knob.rotation.y = -(Math.PI * 0.75) - neon.level * Math.PI * 1.5 + Math.PI * 1.5;
+}
+function updateNeon(dt) {
+  if (!neon.tubeMat) return;
+  if (game) neon.target.copy(NEON_COLORS[game.turn]);
+  neon.color.lerp(neon.target, 1 - Math.pow(0.02, dt)); // smooth fade to the current player's colour
+  neon.tubeMat.emissive.copy(neon.color);
+  neon.glowMat.color.copy(neon.color);
+  neon.fill.color.copy(neon.color); neon.fill.groundColor.copy(neon.color).multiplyScalar(0.3);
+  neon.a.color.copy(neon.color); neon.b.color.copy(neon.color);
+}
+function propAtRay() {
+  if (!boardGroup) return null;
+  const hits = ray.intersectObject(boardGroup, true);
+  for (const h of hits) if (h.object.userData.prop) return h.object.userData;
+  return null;
 }
 
 // ------------------------------------------------------------ tweens
@@ -242,7 +482,7 @@ function sqPos(sq, N, y = 0) {
   return new THREE.Vector3((c - (N - 1) / 2) * SQ, y, (r - (N - 1) / 2) * SQ);
 }
 function makePieceMesh(color) {
-  const m = new THREE.Mesh(PIECE_GEO, color === 1 ? MAT.red : MAT.black);
+  const m = new THREE.Mesh(PIECE_GEO, color === 1 ? MAT.red : MAT.ivory);
   m.castShadow = true; m.receiveShadow = true; m.rotation.y = Math.random() * Math.PI * 2;
   return m;
 }
@@ -413,7 +653,7 @@ function showMarkers(targets, selSq) {
 
 // ------------------------------------------------------------ game state
 let game = null, aiWorker = null, aiReqId = 0, groqEnabled = false;
-const name = (c) => (c === 1 ? 'Red' : 'Black');
+const name = (c) => (c === 1 ? 'Red' : 'White');
 
 function newGame() {
   const V = VARIANTS[settings.variant];
@@ -431,7 +671,7 @@ function newGame() {
     quietPlies: 0, clock: { 1: 0, '-1': 0 }, history: [],
   };
   camSide = game.mode === 'ai' ? game.human : 1;
-  fitCamera(true);
+  fitCamera(true); setPlungers(true); drawClockFace();
   startTurn();
 }
 const isHumanTurn = () => game && !game.over && (game.mode === 'pvp' || game.turn === game.human);
@@ -528,7 +768,7 @@ async function commitTurn(byColor) {
   const m = completedMove();
   if (!m) { toast('Move a piece first', 900); return; }
   g.busy = true; clearMarkers();
-  Sound.clockPress(); vibrate(15);
+  await pressClock(g.turn);
   const crowned = promotes(g.board, m, g.V), wasMan = Math.abs(g.board[m.path[0]]) === 1;
   g.history.push(notation(m, g.V.N));
   g.board = applyMove(g.board, m, g.V);
@@ -537,6 +777,7 @@ async function commitTurn(byColor) {
   g.steps = [];
   if (crowned) await crownPiece(pieces.get(g.ids[m.path[m.path.length - 1]]));
   g.turn = -g.turn; g.busy = false;
+  setPlungers(false); drawClockFace();
   startTurn();
 }
 
@@ -590,7 +831,6 @@ async function aiTurn() {
   }
   updateHud();
   await sleep(rand(450, 800)); // the AI visibly presses its own END TURN
-  pressBar(g.turn);
   g.busy = false;
   await commitTurn(g.turn);
 }
@@ -624,13 +864,13 @@ let camSide = 1, viewMode = 0;
 const camGoal = { pos: new THREE.Vector3(), active: false };
 function fitCamera(instant) {
   const N = game ? game.V.N : VARIANTS[settings.variant].N;
-  const half = (N * SQ) / 2 + FRAME_W + 0.4;
+  const half = (N * SQ) / 2 + FRAME_W + 0.4, halfW = half + PROPS_MARGIN;
   const vfov = THREE.MathUtils.degToRad(camera.fov), aspect = innerWidth / innerHeight;
   const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect);
-  const barFrac = Math.min(0.45, (2 * 96 + 60) / innerHeight); // room for the two player bars
-  const dW = half / Math.tan(hfov / 2), dH = half / (Math.tan(vfov / 2) * (1 - barFrac));
+  const barFrac = Math.min(0.45, (2 * 80 + 60) / innerHeight); // room for the two player bars
+  const dW = halfW / Math.tan(hfov / 2), dH = half / (Math.tan(vfov / 2) * (1 - barFrac));
   const d = Math.max(dW, dH) + half * 0.08;
-  const tilt = viewMode === 1 ? 0.001 : viewMode === 2 ? 0.75 : (aspect < 1 ? 0.30 : 0.5);
+  const tilt = viewMode === 1 ? 0.001 : viewMode === 2 ? 0.75 : (aspect < 1 ? 0.38 : 0.5);
   const p = new THREE.Vector3(0, d * Math.cos(tilt), camSide * d * Math.sin(tilt));
   controls.target.set(0, 0, camSide * 0.4);
   if (instant) { camera.position.copy(p); controls.update(); } else { camGoal.pos.copy(p); camGoal.active = true; }
@@ -657,8 +897,18 @@ function pieceAtRay() {
   return sq >= 0 ? sq : null;
 }
 canvas.addEventListener('pointerdown', (ev) => {
-  if (!game || game.over || !isHumanTurn() || game.busy) return;
+  if (!game) return;
   pick(ev);
+  const prop = propAtRay();
+  if (prop?.prop === 'toggle') { neon.on = !neon.on; store.set('neonOn', neon.on); applyNeon(); Sound.tick(); vibrate(10); return; }
+  if (prop?.prop === 'knob') { drag = { knob: true, y: ev.clientY, x: ev.clientX, level: neon.level, moved: false }; canvas.setPointerCapture(ev.pointerId); return; }
+  if (prop?.prop === 'clock') {
+    if (game.over) return;
+    if (game.mode === 'ai' && prop.color !== game.human) { toast('That is the computer’s clock', 900); return; }
+    if (prop.color !== game.turn) { toast(`Wait — it's ${name(game.turn)}'s turn`, 900); return; }
+    commitTurn(prop.color); return;
+  }
+  if (game.over || !isHumanTurn() || game.busy) return;
   const psq = pieceAtRay(), sq = psq ?? squareAtRay()?.sq;
   if (sq == null) return;
   const prefix = game.steps.length ? game.steps : game.selected != null ? [game.selected] : null;
@@ -670,6 +920,12 @@ canvas.addEventListener('pointerdown', (ev) => {
   } else if (game.selected != null && !game.steps.length) { lift(null); game.selected = null; clearMarkers(); }
 });
 canvas.addEventListener('pointermove', (ev) => {
+  if (drag?.knob) {
+    const d = (drag.y - ev.clientY + (ev.clientX - drag.x)) / 160;
+    if (Math.abs(d) > 0.03) drag.moved = true;
+    neon.level = Math.min(1, Math.max(0.08, drag.level + d)); if (!neon.on && drag.moved) neon.on = true;
+    applyNeon(true); return;
+  }
   if (!drag || drag.from == null || game.busy) return;
   pick(ev);
   if (Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) > 8) drag.moved = true;
@@ -680,6 +936,10 @@ canvas.addEventListener('pointermove', (ev) => {
 canvas.addEventListener('pointerup', async (ev) => {
   const d = drag; drag = null;
   if (!d || !game) return;
+  if (d.knob) {
+    if (!d.moved) { neon.level = neon.level >= 0.99 ? 0.25 : Math.min(1, Math.round((neon.level + 0.25) * 4) / 4); neon.on = true; applyNeon(true); Sound.tick(); }
+    store.set('neonLevel', neon.level); store.set('neonOn', neon.on); return;
+  }
   pick(ev);
   if (d.dest != null) { await humanStep(d.dest); return; }
   if (d.from != null && d.moved) {
@@ -699,19 +959,6 @@ function vibrate(p) { try { navigator.vibrate?.(p); } catch { /* not supported *
 
 // ------------------------------------------------------------ player bars (END TURN at each player's end)
 const barFor = (color) => (color === camSide ? $('barBottom') : $('barTop'));
-function pressBar(color) {
-  const b = barFor(color).querySelector('.pend');
-  b.classList.add('pressed'); setTimeout(() => b.classList.remove('pressed'), 180);
-}
-for (const id of ['barBottom', 'barTop']) {
-  $(id).querySelector('.pend').addEventListener('click', () => {
-    if (!game) return;
-    const color = id === 'barBottom' ? camSide : -camSide;
-    if (game.mode === 'ai' && color !== game.human) return;
-    pressBar(color);
-    commitTurn(color);
-  });
-}
 function updateHud() {
   if (!game) return;
   const g = game, cnt = countPieces(g.board), ready = !!completedMove() && isHumanTurn() && !g.busy;
@@ -719,24 +966,22 @@ function updateHud() {
   for (const color of [1, -1]) {
     const bar = barFor(color), mine = g.turn === color && !g.over;
     const isAI = g.mode === 'ai' && color !== g.human;
-    bar.dataset.color = color === 1 ? 'red' : 'black';
+    bar.dataset.color = color === 1 ? 'red' : 'ivory';
     bar.querySelector('.pname').textContent = isAI ? `Computer · Lv ${g.level}` : g.mode === 'ai' ? 'You' : `${name(color)} player`;
     const left = color === 1 ? cnt.red : cnt.black, kings = color === 1 ? cnt.rk : cnt.bk;
     bar.querySelector('.pcount').textContent = `${left} pieces${kings ? ` · ${kings}♛` : ''}`;
     const light = bar.querySelector('.plight em');
     bar.classList.toggle('active', mine);
     bar.classList.toggle('ready', mine && ready);
-    const btn = bar.querySelector('.pend');
-    btn.disabled = !(mine && ready);
-    btn.classList.toggle('hidden', isAI);
     if (g.over) light.textContent = 'GAME OVER';
     else if (!mine) light.textContent = 'WAIT';
     else if (isAI) light.textContent = g.steps.length ? 'MOVING…' : 'THINKING…';
-    else if (ready) light.textContent = 'DONE ➜';
+    else if (ready) light.textContent = 'TAP YOUR CLOCK';
     else light.textContent = g.steps.length ? 'JUMP / END' : 'YOUR TURN';
   }
   $('btnHint').classList.toggle('on', settings.hints);
   $('btnSound').classList.toggle('on', settings.sound);
+  updateClockLeds();
 }
 function drawClocks() {
   if (!game) return;
@@ -744,6 +989,7 @@ function drawClocks() {
     const s = Math.floor(game.clock[c] / 1000);
     barFor(c).querySelector('.ptime').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
+  drawClockFace();
 }
 let toastTimer = 0;
 function toast(txt, ms = 1300) {
@@ -759,7 +1005,7 @@ function syncMenu() {
   $('lvlInput').value = currentLevel();
   $('lvlMax').textContent = `(unlocked: ${maxLevel()} · no cap)`;
   $('rulesNote').textContent = settings.variant === 'american'
-    ? 'Men move 1 square diagonally forward. Kings move 1 square any diagonal way. Black moves first.'
+    ? 'Men move 1 square diagonally forward. Kings move 1 square any diagonal way. Red moves first.'
     : 'Men capture forward and backward. Kings fly any distance on a diagonal. Red moves first.';
 }
 document.querySelectorAll('.seg').forEach((seg) => seg.addEventListener('click', (e) => {
@@ -820,7 +1066,7 @@ addEventListener('resize', onResize);
 let last = performance.now(), clockAcc = 0;
 renderer.setAnimationLoop((now) => {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  runTweens(now); updateSparkles(now, dt); updateContacts();
+  runTweens(now); updateSparkles(now, dt); updateContacts(); updateNeon(dt);
   if (camGoal.active) { camera.position.lerp(camGoal.pos, 1 - Math.pow(0.002, dt)); if (camera.position.distanceTo(camGoal.pos) < 0.05) camGoal.active = false; }
   const pulse = 0.5 + Math.sin(now / 240) * 0.18; markerMat.opacity = pulse; capMat.opacity = pulse + 0.1;
   if (game && !game.over && !document.hidden) { game.clock[game.turn] += dt * 1000; clockAcc += dt; if (clockAcc > 0.5) { clockAcc = 0; drawClocks(); } }

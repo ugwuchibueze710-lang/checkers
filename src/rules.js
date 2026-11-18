@@ -6,7 +6,7 @@ export const VARIANTS = {
   american: {
     id: 'american', name: 'American Checkers (8×8)', N: 8, rows: 3,
     flyingKings: false, menCaptureBack: false, maxCaptureRule: false,
-    firstToMove: -1, // black (dark) moves first in American checkers
+    firstToMove: 1, // with red & white sets, red plays the "black" side and moves first
     manValue: 100, kingValue: 165,
   },
   international: {
