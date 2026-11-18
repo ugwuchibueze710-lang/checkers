@@ -1,6 +1,5 @@
 // Royal Checkers — phone-first, photo-scanned materials, real motion.
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { VARIANTS, createInitial, generateMoves, applyMove, promotes, notation, countPieces, boardAscii } from './rules.js';
@@ -43,15 +42,11 @@ renderer.shadowMap.type = THREE.PCFShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x120c08);
-const camera = new THREE.PerspectiveCamera(36, innerWidth / innerHeight, 0.5, 300);
-const controls = new OrbitControls(camera, canvas);
-controls.enableDamping = true; controls.dampingFactor = 0.08; controls.enablePan = false;
-controls.maxPolarAngle = Math.PI * 0.42; controls.minDistance = 12; controls.maxDistance = 90;
-controls.touches = { ONE: null, TWO: THREE.TOUCH.DOLLY_ROTATE }; // one finger = play, two fingers = look around
+const camera = new THREE.PerspectiveCamera(28, innerWidth / innerHeight, 1, 400); // long lens = flat, photo-like top view
 
 // lamp over the table: warm, soft, low ambient (lets the wood read as real)
 const lamp = new THREE.SpotLight(0xffe2bd, 1700, 0, Math.PI / 3.4, 0.85, 2);
-lamp.position.set(2, 30, 7);
+lamp.position.set(13, 30, -11); // off to the side, so its reflection doesn't wash out the squares from above
 lamp.castShadow = true;
 lamp.shadow.mapSize.set(IS_PHONE ? 1024 : 2048, IS_PHONE ? 1024 : 2048);
 lamp.shadow.bias = -0.0002; lamp.shadow.normalBias = 0.02; lamp.shadow.camera.near = 12; lamp.shadow.camera.far = 50;
@@ -238,7 +233,7 @@ const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, dept
 const clock = { group: null, plungers: {}, leds: {}, ctx: null, tex: null, down: 0 };
 const neon = { tube: null, glow: null, fill: null, color: new THREE.Color(0xff2a40), target: new THREE.Color(0xff2a40), on: store.get('neonOn', true), level: store.get('neonLevel', 0.7), toggle: null, knob: null };
 const NEON_COLORS = { 1: new THREE.Color(0xff2440), '-1': new THREE.Color(0x8fd2ff) };
-const PROPS_MARGIN = 3.6; // how far the clock / control box reach past the frame
+const PROPS_MARGIN = 2.95; // how far the clock / control box reach past the frame
 
 function roundedRectPoints(hx, hz, r, y, seg = 8) {
   const pts = [], corners = [[hx - r, hz - r, 0], [-hx + r, hz - r, Math.PI / 2], [-hx + r, -hz + r, Math.PI], [hx - r, -hz + r, Math.PI * 1.5]];
@@ -369,7 +364,7 @@ function rebuildCable(from, outDir, to, inDir) {
 let propsPortrait = null, propsSide = 0;
 function layoutProps() {
   if (!clock.group || !neon.box) return;
-  const outer = boardHalf + FRAME_W, portrait = innerWidth / innerHeight < 1, side = camSide;
+  const outer = boardHalf + FRAME_W, portrait = false, side = camSide;
   if (portrait === propsPortrait && side === propsSide && neon.cable) return;
   propsPortrait = portrait; propsSide = side;
   const y = -BOARD_T;
@@ -383,11 +378,11 @@ function layoutProps() {
     const to = neon.box.position.clone().add(new THREE.Vector3(0, 0.3, -side * 1.38));
     rebuildCable(from, new THREE.Vector3(0, 0, side), to, new THREE.Vector3(0, 0, side));
   } else {
-    clock.group.position.set(outer + 1.75, y, 0); clock.group.rotation.y = 0;
-    neon.box.position.set(-outer - 1.75, y, outer * 0.38); neon.box.rotation.y = 0;
-    const from = new THREE.Vector3(-outer, y + 0.35, outer * 0.38 - 3.2);
-    const to = neon.box.position.clone().add(new THREE.Vector3(0, 0.3, -1.38));
-    rebuildCable(from, new THREE.Vector3(-1, 0, 0), to, new THREE.Vector3(0, 0, 1));
+    clock.group.position.set(side * (outer + 1.6), y, 0); clock.group.rotation.y = 0; // plungers stay at their own player's end
+    neon.box.position.set(-side * (outer + 1.55), y, 0); neon.box.rotation.y = side === 1 ? 0 : Math.PI;
+    const from = new THREE.Vector3(-side * outer, y + 0.35, -side * 3.6);
+    const to = neon.box.position.clone().add(new THREE.Vector3(0, 0.3, -side * 1.38));
+    rebuildCable(from, new THREE.Vector3(-side, 0, 0), to, new THREE.Vector3(0, 0, side));
   }
   drawClockFace();
 }
@@ -482,7 +477,7 @@ function applyNeon(instant) {
   neon.tubeMat.emissiveIntensity = neon.on ? 0.6 + 3.2 * L : 0.0;
   neon.tubeMat.color.set(neon.on ? 0xffffff : 0x8a8a8a);
   neon.glowMat.opacity = 0.95 * L;
-  neon.fill.intensity = 0.55 * L;
+  neon.fill.intensity = 0; // under-glow can't reach the board's top surface
   neon.a.intensity = neon.b.intensity = 26 * L;
   if (neon.led) neon.led.material.color.set(neon.on ? 0x33ff66 : 0x1a2a1a);
   if (neon.toggle) {
@@ -903,32 +898,23 @@ function endGame(winner, why) {
   setTimeout(() => $('over').classList.remove('hidden'), 900);
 }
 
-// ------------------------------------------------------------ camera (fits the board to any phone)
-let camSide = 1, viewMode = 0;
-const camGoal = { pos: new THREE.Vector3(), active: false };
-function fitCamera(instant) {
+// ------------------------------------------------------------ camera: fixed, straight-down view of the table (like a photo)
+let camSide = 1;
+function fitCamera() {
   const N = game ? game.V.N : VARIANTS[settings.variant].N;
-  const half = (N * SQ) / 2 + FRAME_W + 0.4, halfW = half + PROPS_MARGIN;
+  const outer = (N * SQ) / 2 + FRAME_W;
+  layoutProps();
+  const halfW = outer + PROPS_MARGIN;            // board + the clock / switch box at the middle of each side
+  const halfZ = outer + 2.1;                     // board + the captured pieces at each end
   const vfov = THREE.MathUtils.degToRad(camera.fov), aspect = innerWidth / innerHeight;
   const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect);
-  const barFrac = Math.min(0.45, (2 * 80 + 60) / innerHeight); // room for the two player bars
-  const portrait = aspect < 1;
-  layoutProps();
-  let d, tz = camSide * 0.4;
-  if (portrait) {
-    const outer = (N * SQ) / 2 + FRAME_W, front = outer + 4.4; // board + the strip in front holding clock & switch
-    const halfZ = (front + outer) / 2;
-    tz = camSide * (front - outer) / 2;
-    const dW2 = (outer + 0.15) / Math.tan(hfov / 2), dH2 = (halfZ * 0.93) / (Math.tan(vfov / 2) * (1 - barFrac));
-    d = Math.max(dW2, dH2);
-  } else {
-    const dW = halfW / Math.tan(hfov / 2), dH = half / (Math.tan(vfov / 2) * (1 - barFrac));
-    d = Math.max(dW, dH) + half * 0.08;
-  }
-  const tilt = viewMode === 1 ? 0.001 : viewMode === 2 ? 0.75 : (aspect < 1 ? 0.38 : 0.5);
-  const p = new THREE.Vector3(0, d * Math.cos(tilt), tz + camSide * d * Math.sin(tilt));
-  controls.target.set(0, 0, tz);
-  if (instant) { camera.position.copy(p); controls.update(); } else { camGoal.pos.copy(p); camGoal.active = true; }
+  const barFrac = Math.min(0.45, (2 * 80 + 60) / innerHeight); // room for the player bars + tool row
+  const d = Math.max(halfW / Math.tan(hfov / 2), halfZ / (Math.tan(vfov / 2) * (1 - barFrac))) + 0.6;
+  // nudge so the table sits centred between the top bar and the tool row
+  const shift = camSide * Math.tan(vfov / 2) * d * (60 / innerHeight);
+  camera.up.set(0, 0, -camSide);               // your edge of the board is always at the bottom
+  camera.position.set(0, d, shift);
+  camera.lookAt(0, 0, shift);
 }
 
 // ------------------------------------------------------------ input
@@ -1087,7 +1073,7 @@ $('btnHint').onclick = () => {
   settings.hints = !settings.hints; store.set('hints', settings.hints); updateHud();
   if (game && isHumanTurn()) { const p = game.steps.length ? game.steps : game.selected != null ? [game.selected] : null; if (p) showMarkers(targetsFrom(p), p[p.length - 1]); }
 };
-$('btnView').onclick = () => { viewMode = (viewMode + 1) % 3; fitCamera(false); };
+$('btnView').onclick = () => { camSide = -camSide; fitCamera(); updateHud(); }; // look from the other side of the table
 $('btnSound').onclick = () => { settings.sound = !settings.sound; store.set('sound', settings.sound); Sound.enabled = settings.sound; updateHud(); };
 Sound.enabled = settings.sound;
 
@@ -1122,10 +1108,8 @@ let last = performance.now(), clockAcc = 0;
 renderer.setAnimationLoop((now) => {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   runTweens(now); updateSparkles(now, dt); updateContacts(); updateNeon(dt);
-  if (camGoal.active) { camera.position.lerp(camGoal.pos, 1 - Math.pow(0.002, dt)); if (camera.position.distanceTo(camGoal.pos) < 0.05) camGoal.active = false; }
   const pulse = 0.5 + Math.sin(now / 240) * 0.18; markerMat.opacity = pulse; capMat.opacity = pulse + 0.1;
   if (game && !game.over && !document.hidden) { game.clock[game.turn] += dt * 1000; clockAcc += dt; if (clockAcc > 0.5) { clockAcc = 0; drawClocks(); } }
-  controls.update();
   renderer.render(scene, camera);
 });
 
@@ -1137,7 +1121,7 @@ buildBoard(VARIANTS[settings.variant]);
 })();
 manager.onLoad = () => { $('loading').style.opacity = 0; setTimeout(() => $('loading').remove(), 600); openMenu(); };
 window.__rc = {
-  get game() { return game; }, camera, controls, pieces, commitTurn, humanStep, selectSquare, crownPiece,
+  get game() { return game; }, camera, pieces, commitTurn, humanStep, selectSquare, crownPiece,
   debugSetup(arr, turn) {
     const V = game.V; clearPieces(); game.board = Int8Array.from(arr); game.ids.fill(-1); let nid = 0;
     for (let sq = 0; sq < arr.length; sq++) if (arr[sq]) { game.ids[sq] = nid; const p = makePiece(nid, Math.sign(arr[sq])); p.position.copy(sqPos(sq, V.N)); if (Math.abs(arr[sq]) === 2) crownPiece(p); nid++; }
