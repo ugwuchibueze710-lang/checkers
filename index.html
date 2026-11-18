@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#120c08" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="manifest" href="manifest.webmanifest" />
+<title>Royal Checkers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<!-- loading -->
+<div id="loading"><div class="crest">♛</div><div class="ltxt">Setting the table…</div><div class="bar"><i id="loadbar"></i></div></div>
+
+<!-- Player bars: each player's END TURN sits at their own end of the board -->
+<div id="barTop" class="pbar hidden">
+  <div class="pinfo"><i class="pc"></i><div><b class="pname">Player</b><small><span class="pcount">12 pieces</span> · <span class="ptime">0:00</span></small></div></div>
+  <div class="plight"><span></span><em>WAIT</em></div>
+  <button class="pend" disabled>END TURN</button>
+</div>
+<div id="barBottom" class="pbar hidden">
+  <div class="pinfo"><i class="pc"></i><div><b class="pname">Player</b><small><span class="pcount">12 pieces</span> · <span class="ptime">0:00</span></small></div></div>
+  <div class="plight"><span></span><em>WAIT</em></div>
+  <button class="pend" disabled>END TURN</button>
+</div>
+<div id="tools" class="hidden">
+  <button class="icon" id="btnUndo" title="Take back unconfirmed move">↶</button>
+  <button class="icon" id="btnHint" title="Show legal moves">◎</button>
+  <button class="icon" id="btnView" title="Camera">◰</button>
+  <button class="icon" id="btnSound" title="Sound">♪</button>
+  <button class="icon" id="btnMenu" title="Menu">☰</button>
+  <button id="fsDot" title="Fullscreen on/off" aria-label="Toggle fullscreen"><i></i></button>
+</div>
+
+<div id="aiBubble" class="hidden"><div class="who">Opponent</div><div id="aiText">…</div></div>
+<div id="toast"></div>
+
+<!-- Menu -->
+<div id="menu" class="overlay hidden">
+  <div class="panel">
+    <div class="crest">♛</div>
+    <h1>ROYAL CHECKERS</h1>
+    <p class="sub">Tournament wood · real motion · kings crowned</p>
+
+    <label>Mode</label>
+    <div class="seg" data-key="mode">
+      <button data-v="ai" class="on">vs Computer</button>
+      <button data-v="pvp">2 Players (same screen)</button>
+    </div>
+
+    <label>Rules</label>
+    <div class="seg" data-key="variant">
+      <button data-v="american" class="on">American 8×8</button>
+      <button data-v="international">International 10×10</button>
+    </div>
+    <p class="note" id="rulesNote"></p>
+
+    <label>Captures</label>
+    <div class="seg" data-key="forced">
+      <button data-v="0" class="on">Optional</button>
+      <button data-v="1">Forced (official)</button>
+    </div>
+
+    <div id="aiOpts">
+      <label>Play as</label>
+      <div class="seg" data-key="human">
+        <button data-v="1" class="on">Red</button>
+        <button data-v="-1">Black</button>
+      </div>
+      <label>Level <span class="muted" id="lvlMax"></span></label>
+      <div class="lvl">
+        <button id="lvlDown">−</button><input id="lvlInput" type="number" min="1" value="1" /><button id="lvlUp">+</button>
+      </div>
+      <p class="note" id="groqNote">Checking Groq AI…</p>
+    </div>
+
+    <div id="pvpOpts" class="hidden">
+      <label>How you're sitting</label>
+      <div class="seg" data-key="autoRotate">
+        <button data-v="0" class="on">Face to face (phone flat)</button>
+        <button data-v="1">Pass the phone</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="btnResume" class="ghost hidden">Resume</button>
+      <button id="btnStart" class="primary">Start Game</button>
+    </div>
+    <p class="help">Tap a piece, then tap where it goes (or drag it). Then press <b>your</b> END TURN at your end of the board. Your opponent can't play until you do. ↶ takes back a move you haven't confirmed. Use two fingers to look around.</p>
+  </div>
+</div>
+
+<!-- Game over -->
+<div id="over" class="overlay hidden">
+  <div class="panel small">
+    <div class="crest" id="overCrest">♛</div>
+    <h1 id="overTitle">Victory</h1>
+    <p class="sub" id="overSub"></p>
+    <div class="row">
+      <button id="btnOverMenu" class="ghost">Menu</button>
+      <button id="btnRetry" class="ghost">Play again</button>
+      <button id="btnNext" class="primary">Next Level →</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
